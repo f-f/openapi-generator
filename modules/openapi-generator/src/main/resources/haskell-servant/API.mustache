@@ -10,14 +10,13 @@
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
 {-# OPTIONS_GHC
--fno-warn-unused-binds -fno-warn-unused-imports -fcontext-stack=328 #-}
+-fno-warn-unused-binds -fno-warn-unused-imports -freduction-depth=328 #-}
 
 module {{title}}.API
   -- * Client and Server
   ( ServerConfig(..)
-  , {{title}}Backend
+  , {{title}}Backend(..)
   , create{{title}}Client
-  , run{{title}}Server
   , run{{title}}Client
   , run{{title}}ClientWithManager
   , {{title}}Client
@@ -29,6 +28,7 @@ import {{title}}.Types
 
 import Control.Monad.Except (ExceptT)
 import Control.Monad.IO.Class
+import Control.Monad.Trans.Reader (ReaderT(..))
 import Data.Aeson (Value)
 import Data.Coerce (coerce)
 import Data.Function ((&))
@@ -39,14 +39,16 @@ import Data.Text (Text)
 import qualified Data.Text as T
 import GHC.Exts (IsString(..))
 import GHC.Generics (Generic)
-import Network.HTTP.Client (Manager, defaultManagerSettings, newManager)
+import Network.HTTP.Client (Manager, newManager)
+import Network.HTTP.Client.TLS (tlsManagerSettings)
 import Network.HTTP.Types.Method (methodOptions)
 import qualified Network.Wai.Handler.Warp as Warp
 import Servant (ServantErr, serve)
 import Servant.API
 import Servant.API.Verbs (StdMethod(..), Verb)
-import Servant.Client (Scheme(Http), ServantError, client)
-import Servant.Common.BaseUrl (BaseUrl(..))
+import Servant.Client (Scheme(Http), ServantError, client, mkClientEnv, ClientEnv, parseBaseUrl)
+import Servant.Client.Internal.HttpClient (ClientM(..))
+import Servant.Server (Handler(..))
 import Web.HttpApiData
 
 
@@ -85,8 +87,7 @@ type {{title}}API
 
 -- | Server or client configuration, specifying the host and port to query or serve on.
 data ServerConfig = ServerConfig
-  { configHost :: String  -- ^ Hostname to serve on, e.g. "127.0.0.1"
-  , configPort :: Int      -- ^ Port to serve on, e.g. 8080
+  { configUrl :: String  -- ^ scheme://hostname:port/path
   } deriving (Eq, Ord, Show, Read)
 
 -- | List of elements parsed from a query.
@@ -151,22 +152,22 @@ data {{title}}Backend m = {{title}}Backend
   }
 
 newtype {{title}}Client a = {{title}}Client
-  { runClient :: Manager -> BaseUrl -> ExceptT ServantError IO a
+  { runClient :: ClientEnv -> ExceptT ServantError IO a
   } deriving Functor
 
 instance Applicative {{title}}Client where
-  pure x = {{title}}Client (\_ _ -> pure x)
+  pure x = {{title}}Client (\_ -> pure x)
   ({{title}}Client f) <*> ({{title}}Client x) =
-    {{title}}Client (\manager url -> f manager url <*> x manager url)
+    {{title}}Client (\env -> f env <*> x env)
 
 instance Monad {{title}}Client where
   ({{title}}Client a) >>= f =
-    {{title}}Client (\manager url -> do
-      value <- a manager url
-      runClient (f value) manager url)
+    {{title}}Client (\env -> do
+      value <- a env
+      runClient (f value) env)
 
 instance MonadIO {{title}}Client where
-  liftIO io = {{title}}Client (\_ _ -> liftIO io)
+  liftIO io = {{title}}Client (\_ -> liftIO io)
 {{/apiInfo}}
 
 {{#apiInfo}}
@@ -180,24 +181,12 @@ create{{title}}Client = {{title}}Backend{..}
 -- | Run requests in the {{title}}Client monad.
 run{{title}}Client :: ServerConfig -> {{title}}Client a -> ExceptT ServantError IO a
 run{{title}}Client clientConfig cl = do
-  manager <- liftIO $ newManager defaultManagerSettings
+  manager <- liftIO $ newManager tlsManagerSettings
   run{{title}}ClientWithManager manager clientConfig cl
 
 -- | Run requests in the {{title}}Client monad using a custom manager.
 run{{title}}ClientWithManager :: Manager -> ServerConfig -> {{title}}Client a -> ExceptT ServantError IO a
-run{{title}}ClientWithManager manager clientConfig cl =
-  runClient cl manager $ BaseUrl Http (configHost clientConfig) (configPort clientConfig) ""
-{{/apiInfo}}
-
-{{#apiInfo}}
--- | Run the {{title}} server at the provided host and port.
-run{{title}}Server :: MonadIO m => ServerConfig -> {{title}}Backend (ExceptT ServantErr IO)  -> m ()
-run{{title}}Server ServerConfig{..} backend =
-  liftIO $ Warp.runSettings warpSettings $ serve (Proxy :: Proxy {{title}}API) (serverFromBackend backend)
-  where
-    warpSettings = Warp.defaultSettings & Warp.setPort configPort & Warp.setHost (fromString configHost)
-    serverFromBackend {{title}}Backend{..} =
-      ({{#apis}}{{#operations}}{{#operation}}coerce {{operationId}}{{#hasMore}} :<|>
-       {{/hasMore}}{{/operation}}{{/operations}}{{#hasMore}} :<|>
-       {{/hasMore}}{{/apis}})
+run{{title}}ClientWithManager manager clientConfig cl = do
+  url <- parseBaseUrl (configUrl clientConfig)
+  runClient cl $ mkClientEnv manager url
 {{/apiInfo}}
