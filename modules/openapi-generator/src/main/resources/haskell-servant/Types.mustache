@@ -19,7 +19,8 @@ import Data.Aeson (Value, FromJSON(..), ToJSON(..), genericToJSON, genericParseJ
 import Data.Aeson.Types (Options(..), defaultOptions)
 import Data.Text (Text)
 import Data.Time
-import Data.Swagger (ToSchema)
+import Data.Swagger (ToSchema, declareNamedSchema)
+import qualified Data.Swagger as Swagger
 import qualified Data.Char as Char
 import qualified Data.Text as T
 import qualified Data.Map as Map
@@ -43,7 +44,11 @@ instance FromJSON {{classname}} where
   parseJSON = genericParseJSON (removeFieldLabelPrefix True "{{vendorExtensions.x-prefix}}")
 instance ToJSON {{classname}} where
   toJSON = genericToJSON (removeFieldLabelPrefix False "{{vendorExtensions.x-prefix}}")
-instance ToSchema {{classname}}
+instance ToSchema {{classname}} where
+  declareNamedSchema = Swagger.genericDeclareNamedSchema
+    $ Swagger.fromAesonOptions
+    $ removeFieldLabelPrefix False "{{vendorExtensions.x-prefix}}"
+
 {{/parent}}
 {{#parent}}
 newtype {{classname}} = {{classname}} { un{{classname}} :: {{parent}} }
